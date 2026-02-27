@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+from importlib import metadata as importlib_metadata
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -161,6 +162,14 @@ class UnsupportedModeError(RuntimeError):
 
 class ConfigError(RuntimeError):
     pass
+
+
+def get_app_version() -> str:
+    try:
+        return importlib_metadata.version("neewer-cli")
+    except importlib_metadata.PackageNotFoundError:
+        # Running from source checkout without package installation.
+        return "dev"
 
 
 def ensure_bleak_available() -> None:
@@ -953,11 +962,14 @@ def build_config(args: argparse.Namespace) -> AppConfig:
 
 
 def build_base_command(args: argparse.Namespace) -> List[int]:
-    if args.on:
-        return set_power_bytestring(True)
-    if args.off:
-        return set_power_bytestring(False)
-    return calculate_bytestring(args.mode, args)
+    try:
+        if args.on:
+            return set_power_bytestring(True)
+        if args.off:
+            return set_power_bytestring(False)
+        return calculate_bytestring(args.mode, args)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid command settings: {exc}") from exc
 
 
 def apply_command_overrides(
@@ -1009,7 +1021,10 @@ def build_per_light_command_map(args: argparse.Namespace) -> Dict[str, List[int]
     for address, command_info in per_light.items():
         temp_args = argparse.Namespace(**vars(args))
         apply_command_overrides(temp_args, command_info)
-        command_map[address] = build_base_command(temp_args)
+        try:
+            command_map[address] = build_base_command(temp_args)
+        except ConfigError as exc:
+            raise ConfigError(f"Invalid per-light preset for {address}: {exc}") from exc
     return command_map
 
 
@@ -1157,6 +1172,11 @@ async def async_main(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Standalone Neewer BLE CLI utility (no GUI)."
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {get_app_version()}",
     )
     parser.add_argument(
         "--config",

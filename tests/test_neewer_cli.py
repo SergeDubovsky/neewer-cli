@@ -10,6 +10,11 @@ def make_args() -> argparse.Namespace:
     return neewer_cli.build_parser().parse_args([])
 
 
+def test_get_app_version_returns_non_empty_string():
+    assert isinstance(neewer_cli.get_app_version(), str)
+    assert neewer_cli.get_app_version() != ""
+
+
 def test_selector_to_addresses_group_and_mac():
     groups = {"studio": ["AA:AA:AA:AA:AA:AA", "BB:BB:BB:BB:BB:BB"]}
     resolved = neewer_cli.selector_to_addresses("group:studio,cc:cc:cc:cc:cc:cc", groups)
@@ -81,6 +86,26 @@ def test_build_per_light_command_map_uses_overrides():
     command_map = neewer_cli.build_per_light_command_map(args)
     assert command_map["AA:AA:AA:AA:AA:AA"] == [120, 135, 2, 40, 56, 50]
     assert command_map["BB:BB:BB:BB:BB:BB"] == [120, 129, 1, 2]
+
+
+def test_build_base_command_invalid_mode_raises_config_error():
+    args = make_args()
+    args.mode = "BADMODE"
+    args.on = False
+    args.off = False
+
+    with pytest.raises(neewer_cli.ConfigError, match="Invalid command settings"):
+        neewer_cli.build_base_command(args)
+
+
+def test_build_per_light_command_map_invalid_override_raises_config_error():
+    args = make_args()
+    args._per_light_preset = {
+        "AA:AA:AA:AA:AA:AA": {"mode": "BADMODE"},
+    }
+
+    with pytest.raises(neewer_cli.ConfigError, match="Invalid per-light preset"):
+        neewer_cli.build_per_light_command_map(args)
 
 
 def test_calculate_bytestring_cct_clamps_and_parses():
@@ -221,4 +246,3 @@ async def test_send_command_once_writes_payload():
     assert err == ""
     assert len(client.calls) == 1
     assert client.calls[0][0] == neewer_cli.SET_LIGHT_UUID
-

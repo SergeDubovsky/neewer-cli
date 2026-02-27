@@ -30,20 +30,21 @@ Recommended for end users:
 python -m pip install --user pipx
 python -m pipx ensurepath
 
-# install from GitHub repo
-pipx install git+https://github.com/SergeDubovsky/neewer-cli.git
+# install from PyPI (preferred once published)
+pipx install neewer-cli
 ```
 
-Alternative (local user install):
+Alternative before/without PyPI:
 
 ```bash
-pip install --user git+https://github.com/SergeDubovsky/neewer-cli.git
+pipx install git+https://github.com/SergeDubovsky/neewer-cli.git
 ```
 
 After installation, run:
 
 ```bash
 neewer-cli --help
+neewer-cli --version
 ```
 
 ## Quick Start
@@ -53,12 +54,16 @@ neewer-cli --help
 neewer-cli --list
 
 # copy example config to default config location
+# Windows
 copy neewer.example.json %USERPROFILE%\.neewer
 
+# macOS/Linux
+cp neewer.example.json ~/.neewer
+
 # run presets from config
-neewer-cli --preset studio_on
-neewer-cli --preset studio_off
-neewer-cli --preset studio_key_fill_default
+neewer-cli --preset all_on
+neewer-cli --preset all_off
+neewer-cli --preset key_cct_5600_30
 ```
 
 ## Config
@@ -75,11 +80,24 @@ Config supports:
 - `presets`: reusable command sets
 - `presets.<name>.per_light`: different commands per MAC in one run
 
-See `neewer.example.json`.
+See `neewer.example.json` and the full config reference:
+
+- Wiki config guide: https://github.com/SergeDubovsky/neewer-cli/wiki/Configuration
 
 ## License
 
 MIT. See `LICENSE`.
+
+## Project Docs
+
+- Wiki home: https://github.com/SergeDubovsky/neewer-cli/wiki
+- Wiki config reference: [docs/wiki/Configuration.md](docs/wiki/Configuration.md)
+- Developer guide: [docs/developer-guide.md](docs/developer-guide.md)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Release process: [RELEASING.md](RELEASING.md)
+- Security policy: [SECURITY.md](SECURITY.md)
+- Support policy: [SUPPORT.md](SUPPORT.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ## Releases
 

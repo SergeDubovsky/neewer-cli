@@ -18,6 +18,7 @@ dependencies = [
 ]
 keywords = ["neewer", "ble", "bluetooth", "lighting", "cli"]
 classifiers = [
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.9",
@@ -35,6 +36,8 @@ dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "build>=1.2",
+  "twine>=5.0",
+  "ruff>=0.6",
 ]
 
 [project.scripts]
@@ -47,3 +50,6 @@ Issues = "https://github.com/SergeDubovsky/neewer-cli/issues"
 
 [tool.setuptools]
 py-modules = ["neewer_cli"]
+
+[tool.ruff]
+target-version = "py39"

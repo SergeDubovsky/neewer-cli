@@ -1,4 +1,10 @@
 include README.md
+include CONTRIBUTING.md
+include RELEASING.md
+include SECURITY.md
+include SUPPORT.md
+include CODE_OF_CONDUCT.md
 include LICENSE
 include NOTICE
 include neewer.example.json
+recursive-include docs *.md
