@@ -70,6 +70,35 @@ def test_apply_preset_from_config_sets_per_light_and_light_selector():
     }
 
 
+def test_apply_preset_from_config_scene_aliases_map_to_extended_args():
+    args = make_args()
+    args.preset = "scene_adv"
+    config = {
+        "presets": {
+            "scene_adv": {
+                "mode": "SCENE",
+                "effect": 13,
+                "enable_extended_scene": True,
+                "bright_min": 20,
+                "bright_max": 80,
+                "temp_min": 3200,
+                "temp_max": 5600,
+                "speed": 7,
+            }
+        }
+    }
+
+    neewer_cli.apply_preset_from_config(args, config, [])
+    assert args.mode == "SCENE"
+    assert args.scene == 13
+    assert args.enable_extended_scene is True
+    assert args.scene_bright_min == 20
+    assert args.scene_bright_max == 80
+    assert args.scene_temp_min == 3200
+    assert args.scene_temp_max == 5600
+    assert args.scene_speed == 7
+
+
 def test_build_per_light_command_map_uses_overrides():
     args = make_args()
     args.mode = "CCT"
@@ -86,6 +115,31 @@ def test_build_per_light_command_map_uses_overrides():
     command_map = neewer_cli.build_per_light_command_map(args)
     assert command_map["AA:AA:AA:AA:AA:AA"] == [120, 135, 2, 40, 56, 50]
     assert command_map["BB:BB:BB:BB:BB:BB"] == [120, 129, 1, 2]
+
+
+def test_apply_command_overrides_scene_aliases():
+    args = make_args()
+    args.mode = "SCENE"
+    args.enable_extended_scene = False
+    neewer_cli.apply_command_overrides(
+        args,
+        {
+            "effect": 12,
+            "bright_min": 15,
+            "bright_max": 65,
+            "hue_min": 20,
+            "hue_max": 220,
+            "speed": 9,
+            "special_options": 3,
+        },
+    )
+    assert args.scene == 12
+    assert args.scene_bright_min == 15
+    assert args.scene_bright_max == 65
+    assert args.scene_hue_min == 20
+    assert args.scene_hue_max == 220
+    assert args.scene_speed == 9
+    assert args.scene_special == 3
 
 
 def test_build_base_command_invalid_mode_raises_config_error():
@@ -112,6 +166,29 @@ def test_calculate_bytestring_cct_clamps_and_parses():
     args = argparse.Namespace(temp=10100, bri=150, gm=-60, hue=0, sat=0, scene=1)
     command = neewer_cli.calculate_bytestring("CCT", args)
     assert command == [120, 135, 2, 100, 100, 0]
+
+
+def test_calculate_bytestring_scene_extended_payload_enabled():
+    args = argparse.Namespace(
+        temp=5600,
+        bri=30,
+        gm=0,
+        hue=120,
+        sat=70,
+        scene=12,
+        enable_extended_scene=True,
+        scene_bright_min=10,
+        scene_bright_max=90,
+        scene_temp_min=3200,
+        scene_temp_max=6500,
+        scene_hue_min=30,
+        scene_hue_max=180,
+        scene_speed=6,
+        scene_sparks=2,
+        scene_special=1,
+    )
+    command = neewer_cli.calculate_bytestring("SCENE", args)
+    assert command == [120, 136, 7, 12, 30, 30, 0, 180, 0, 6]
 
 
 def test_build_payload_sequence_cct_only_splits_commands():
@@ -163,6 +240,30 @@ def test_build_payload_sequence_non_infinity_cct_drops_gm():
     assert seq == [(neewer_cli.tag_checksum([120, 135, 2, 40, 56]), False, 0.0)]
 
 
+def test_build_payload_sequence_rejects_extended_scene_on_unsupported_model():
+    light = neewer_cli.LightInfo(
+        name="FS150B",
+        realname="FS150B",
+        address="AA:AA:AA:AA:AA:AA",
+        rssi=-50,
+        cct_only=False,
+        infinity_mode=0,
+        ble_device=None,
+    )
+    extended_scene = [120, 136, 7, 12, 30, 30, 0, 180, 0, 6]
+
+    with pytest.raises(neewer_cli.UnsupportedModeError, match="extended scene"):
+        neewer_cli.build_payload_sequence(light, extended_scene, power_with_response=True)
+
+
+def test_parse_status_payload_maps_power_and_channel():
+    parsed = neewer_cli.parse_status_payload([120, 2, 1, 1], [120, 1, 1, 4])
+    assert parsed["power"] == "ON"
+    assert parsed["channel"] == 4
+    assert parsed["power_raw"] == [120, 2, 1, 1]
+    assert parsed["channel_raw"] == [120, 1, 1, 4]
+
+
 def test_get_static_lights_from_config_includes_missing_addresses():
     lights_cfg = {
         "AA:AA:AA:AA:AA:AA": {"name": "Key", "infinity_mode": 0, "cct_only": False}
@@ -204,6 +305,56 @@ def test_load_user_config_normalizes_lights_and_groups(tmp_path: Path):
     loaded = neewer_cli.load_user_config(str(cfg), debug=False)
     assert set(loaded["lights"].keys()) == {"AA:BB:CC:DD:EE:FF"}
     assert loaded["groups"]["studio"] == ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"]
+
+
+def test_validate_runtime_args_status_requires_feature_flag():
+    parser = neewer_cli.build_parser()
+    args = parser.parse_args(["--status", "--light", "AA:AA:AA:AA:AA:AA"])
+    with pytest.raises(neewer_cli.ConfigError, match="--status requires --enable-status-query"):
+        neewer_cli.validate_runtime_args(args)
+
+
+def test_validate_runtime_args_allows_status_when_enabled():
+    parser = neewer_cli.build_parser()
+    args = parser.parse_args(
+        ["--status", "--enable-status-query", "--light", "AA:AA:AA:AA:AA:AA"]
+    )
+    neewer_cli.validate_runtime_args(args)
+
+
+@pytest.mark.asyncio
+async def test_query_light_status_once_rejects_unsupported_model():
+    class FakeClient:
+        is_connected = True
+
+    light = neewer_cli.LightInfo(
+        name="FS150B",
+        realname="FS150B",
+        address="AA:AA:AA:AA:AA:AA",
+        rssi=-40,
+        cct_only=False,
+        infinity_mode=0,
+        ble_device=None,
+        client=FakeClient(),  # type: ignore[arg-type]
+    )
+    config = neewer_cli.AppConfig(
+        debug=False,
+        scan_timeout=1.0,
+        scan_attempts=1,
+        connect_timeout=1.0,
+        connect_retries=1,
+        write_retries=1,
+        passes=1,
+        parallel=1,
+        settle_delay=0.0,
+        power_with_response=True,
+        enable_status_query=True,
+    )
+
+    ok, err, payload = await neewer_cli.query_light_status_once(light, config)
+    assert ok is False
+    assert "not supported" in err.lower()
+    assert payload == {}
 
 
 @pytest.mark.asyncio

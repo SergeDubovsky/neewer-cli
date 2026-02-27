@@ -2,22 +2,30 @@
   "defaults": {
     "scan_timeout": 3,
     "scan_attempts": 2,
+    "resolve_timeout": 2.0,
     "connect_retries": 3,
     "write_retries": 2,
     "passes": 2,
     "parallel": 1,
+    "status_timeout": 1.0,
+    "enable_status_query": false,
+    "enable_extended_scene": false,
     "skip_discovery": true
   },
   "lights": {
     "D2:E2:75:8B:36:45": {
       "name": "FS150B-Key",
       "cct_only": false,
-      "infinity_mode": 0
+      "infinity_mode": 0,
+      "supports_status_query": false,
+      "supports_extended_scene": false
     },
     "F8:46:85:EF:47:70": {
       "name": "FS150B-Fill",
       "cct_only": false,
-      "infinity_mode": 0
+      "infinity_mode": 0,
+      "supports_status_query": false,
+      "supports_extended_scene": false
     }
   },
   "groups": {
