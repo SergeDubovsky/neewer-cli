@@ -71,7 +71,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download Build Artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: dist-${{ env.RELEASE_TAG }}
           path: dist
