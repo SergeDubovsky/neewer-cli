@@ -99,6 +99,9 @@ MIT. See `LICENSE`.
 - Support policy: [SUPPORT.md](SUPPORT.md)
 - Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
+Wiki source markdown is tracked in `docs/wiki`.
+If the GitHub wiki has not been initialized yet, create the first wiki page once in the UI, then sync from these files.
+
 ## Releases
 
 GitHub releases include wheel/sdist artifacts under `Assets`.
