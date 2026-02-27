@@ -29,21 +29,38 @@ The runtime BLE dependency (`bleak`) is installed automatically by package insta
 
 ## Installation
 
-Current recommended install (GitHub source):
+Recommended install (PyPI):
 
 ```bash
 # one-time install of pipx
 python -m pip install --user pipx
 python -m pipx ensurepath
 
-# install neewer-cli from GitHub
-pipx install git+https://github.com/SergeDubovsky/neewer-cli.git
+# install neewer-cli
+pipx install neewer-cli
 ```
 
 Alternative user install:
 
 ```bash
-python -m pip install --user git+https://github.com/SergeDubovsky/neewer-cli.git
+python -m pip install --user neewer-cli
+```
+
+Upgrade:
+
+```bash
+pipx upgrade neewer-cli
+# or
+python -m pip install --user --upgrade neewer-cli
+```
+
+TestPyPI install (maintainers/testers):
+
+```bash
+python -m pip install \
+  --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple \
+  neewer-cli==X.Y.Z
 ```
 
 After install:
@@ -53,7 +70,7 @@ neewer-cli --help
 neewer-cli --version
 ```
 
-PyPI publishing is handled by GitHub Actions using Trusted Publishing (OIDC).
+PyPI publishing is handled by GitHub Actions using Trusted Publishing (OIDC), with no long-lived PyPI API keys stored in GitHub.
 
 ## Quick Start
 
@@ -193,6 +210,7 @@ Maintainer release flow:
    - publishes to TestPyPI (`testpypi` environment)
    - publishes to PyPI (`pypi` environment)
    - creates a GitHub Release with built artifacts
+   - uses OIDC Trusted Publishing (no PyPI tokens in GitHub secrets)
 
 Trusted Publishing setup requirement:
 
