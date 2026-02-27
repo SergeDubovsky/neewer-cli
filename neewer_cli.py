@@ -21,12 +21,14 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+_BLEAK_IMPORT_ERROR: Optional[Exception] = None
 try:
     from bleak import BleakClient, BleakScanner
-except ModuleNotFoundError:
-    print("Missing dependency: bleak")
-    print("Install with: pip install bleak")
-    sys.exit(1)
+except ModuleNotFoundError as exc:
+    # Keep module importable for unit tests and non-BLE code paths.
+    BleakClient = None  # type: ignore[assignment]
+    BleakScanner = None  # type: ignore[assignment]
+    _BLEAK_IMPORT_ERROR = exc
 
 
 SET_LIGHT_UUID = "69400002-B5A3-F393-E0A9-E50E24DCCA99"
@@ -159,6 +161,13 @@ class UnsupportedModeError(RuntimeError):
 
 class ConfigError(RuntimeError):
     pass
+
+
+def ensure_bleak_available() -> None:
+    if BleakClient is None or BleakScanner is None:
+        raise ConfigError(
+            "Missing dependency: bleak (install with: pip install bleak)"
+        )
 
 
 def log(msg: str, debug: bool = False, enabled: bool = True) -> None:
@@ -720,6 +729,7 @@ def build_payload_sequence(
 async def discover_devices(
     scan_timeout: float, target_addresses: Optional[set], debug: bool
 ) -> Dict[str, LightInfo]:
+    ensure_bleak_available()
     discovered: Dict[str, LightInfo] = {}
 
     try:
@@ -792,6 +802,7 @@ async def discover_with_retries(
 
 
 async def connect_light(light: LightInfo, config: AppConfig) -> Tuple[bool, str]:
+    ensure_bleak_available()
     last_error = ""
     target = light.ble_device if light.ble_device is not None else light.address
 
