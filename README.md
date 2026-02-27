@@ -18,19 +18,44 @@ This project is based on and derives protocol/model support from:
 pip install bleak
 ```
 
+## Installation
+
+Recommended for end users:
+
+```bash
+# one-time install of pipx
+python -m pip install --user pipx
+python -m pipx ensurepath
+
+# install from GitHub repo
+pipx install git+https://github.com/SergeDubovsky/neewer-cli.git
+```
+
+Alternative (local user install):
+
+```bash
+pip install --user git+https://github.com/SergeDubovsky/neewer-cli.git
+```
+
+After installation, run:
+
+```bash
+neewer-cli --help
+```
+
 ## Quick Start
 
 ```bash
 # list lights discovered over BLE scan
-python neewer_cli.py --list
+neewer-cli --list
 
 # copy example config to default config location
 copy neewer.example.json %USERPROFILE%\.neewer
 
 # run presets from config
-python neewer_cli.py --preset studio_on
-python neewer_cli.py --preset studio_off
-python neewer_cli.py --preset studio_key_fill_default
+neewer-cli --preset studio_on
+neewer-cli --preset studio_off
+neewer-cli --preset studio_key_fill_default
 ```
 
 ## Config
@@ -52,3 +77,16 @@ See `neewer.example.json`.
 ## License
 
 MIT. See `LICENSE`.
+
+## Releases
+
+GitHub releases include wheel/sdist artifacts under `Assets`.
+
+- https://github.com/SergeDubovsky/neewer-cli/releases
+
+Maintainer flow:
+
+1. Bump `version` in `pyproject.toml`.
+2. Commit and push to `main`.
+3. Tag and push (`git tag vX.Y.Z && git push origin vX.Y.Z`).
+4. GitHub Actions runs tests/build and publishes release assets.

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neewer-cli"
+version = "0.1.0"
+description = "Standalone Neewer BLE CLI utility"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+  { name = "Sergei Dubovsky" }
+]
+dependencies = [
+  "bleak>=0.20"
+]
+keywords = ["neewer", "ble", "bluetooth", "lighting", "cli"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Environment :: Console",
+  "Topic :: Utilities",
+]
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6.0"]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "build>=1.2",
+]
+
+[project.scripts]
+neewer-cli = "neewer_cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SergeDubovsky/neewer-cli"
+Repository = "https://github.com/SergeDubovsky/neewer-cli"
+Issues = "https://github.com/SergeDubovsky/neewer-cli/issues"
+
+[tool.setuptools]
+py-modules = ["neewer_cli"]
