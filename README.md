@@ -100,10 +100,15 @@ Default config path:
 Top-level config keys:
 
 - `defaults`: default CLI flags
-- `lights`: per-MAC metadata (`name`, `cct_only`, `infinity_mode`, `hw_mac`)
+- `lights`: per-MAC metadata (`name`, `cct_only`, `infinity_mode`, `hw_mac`, optional feature flags)
 - `groups`: named MAC sets
 - `presets`: reusable command sets
 - `presets.<name>.per_light`: per-light command overrides in one run
+
+Optional per-light feature flags in `lights`:
+
+- `supports_status_query`: override model detection for `--status` query commands
+- `supports_extended_scene`: override model detection for extended scene payloads
 
 Reference material:
 
@@ -122,6 +127,27 @@ For flaky BLE environments, tune:
 - `--parallel`
 
 For stable fixed setups, keep `lights` fully defined in config and use `--skip-discovery` to reduce latency.
+
+## Advanced Protocol (Experimental)
+
+Advanced commands are opt-in behind feature flags and still gated by per-model support.
+
+Status query (power/channel):
+
+```bash
+neewer-cli --light group:studio --status --enable-status-query --skip-discovery
+```
+
+Extended scene arguments (supported models only):
+
+```bash
+neewer-cli --light group:studio --mode SCENE --scene 12 --bri 40 \
+  --scene-hue-min 20 --scene-hue-max 240 --scene-speed 7 \
+  --enable-extended-scene
+```
+
+If auto-detection is wrong for a specific light, set `supports_status_query` or
+`supports_extended_scene` for that MAC in config.
 
 ### Serve Mode
 

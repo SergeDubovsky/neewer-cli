@@ -35,6 +35,9 @@ except ModuleNotFoundError as exc:
 
 SET_LIGHT_UUID = "69400002-B5A3-F393-E0A9-E50E24DCCA99"
 NEEWER_SERVICE_UUID = "69400001-B5A3-F393-E0A9-E50E24DCCA99"
+NOTIFY_LIGHT_UUID = "69400003-B5A3-F393-E0A9-E50E24DCCA99"
+STATUS_QUERY_POWER = [120, 133, 0, 253]
+STATUS_QUERY_CHANNEL = [120, 132, 0, 252]
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.neewer")
 
 # (needle in raw device name, corrected model name)
@@ -142,6 +145,8 @@ class LightInfo:
     ble_device: Any
     hw_mac: Optional[str] = None
     client: Optional[BleakClient] = None
+    supports_status_query: Optional[bool] = None
+    supports_extended_scene: Optional[bool] = None
 
 
 @dataclass
@@ -157,6 +162,9 @@ class AppConfig:
     settle_delay: float
     power_with_response: bool
     resolve_timeout: float = 2.0
+    enable_status_query: bool = False
+    enable_extended_scene: bool = False
+    status_timeout: float = 1.0
 
 
 class UnsupportedModeError(RuntimeError):
@@ -440,6 +448,16 @@ def apply_preset_from_config(
         "temperature": "temp",
         "effect": "scene",
         "power": "on",
+        "bright_min": "scene_bright_min",
+        "bright_max": "scene_bright_max",
+        "temp_min": "scene_temp_min",
+        "temp_max": "scene_temp_max",
+        "hue_min": "scene_hue_min",
+        "hue_max": "scene_hue_max",
+        "speed": "scene_speed",
+        "sparks": "scene_sparks",
+        "special_options": "scene_special",
+        "specialoptions": "scene_special",
     }
 
     for raw_key, value in preset.items():
@@ -515,6 +533,18 @@ def get_static_lights_from_config(
             hw_mac = normalize_address(hw_mac)
         else:
             hw_mac = None
+        supports_status_query_raw = meta.get("supports_status_query")
+        supports_extended_scene_raw = meta.get("supports_extended_scene")
+        supports_status_query = (
+            _to_bool(supports_status_query_raw, False)
+            if supports_status_query_raw is not None
+            else None
+        )
+        supports_extended_scene = (
+            _to_bool(supports_extended_scene_raw, False)
+            if supports_extended_scene_raw is not None
+            else None
+        )
 
         lights.append(
             LightInfo(
@@ -526,6 +556,8 @@ def get_static_lights_from_config(
                 infinity_mode=infinity_mode,
                 ble_device=None,
                 hw_mac=hw_mac,
+                supports_status_query=supports_status_query,
+                supports_extended_scene=supports_extended_scene,
             )
         )
 
@@ -548,6 +580,10 @@ def merge_light_metadata_from_config(
             light.infinity_mode = _to_int(meta["infinity_mode"], light.infinity_mode)
         if "hw_mac" in meta and isinstance(meta["hw_mac"], str) and meta["hw_mac"].strip():
             light.hw_mac = normalize_address(meta["hw_mac"])
+        if "supports_status_query" in meta:
+            light.supports_status_query = _to_bool(meta["supports_status_query"], False)
+        if "supports_extended_scene" in meta:
+            light.supports_extended_scene = _to_bool(meta["supports_extended_scene"], False)
 
 
 def get_corrected_name(light_name: str) -> str:
@@ -644,6 +680,126 @@ def convert_fx_index(infinity_mode: int, effect_num: int) -> int:
     return effect_num - 20
 
 
+def _split_hue(hue_value: int) -> Tuple[int, int]:
+    hue = clamp(int(hue_value), 0, 360)
+    return hue & 0xFF, (hue & 0xFF00) >> 8
+
+
+def model_supports_status_query(light: LightInfo) -> bool:
+    if light.supports_status_query is not None:
+        return light.supports_status_query
+
+    name_upper = (light.name or "").upper()
+    if not name_upper:
+        return False
+
+    # Status query notify flow is known to work primarily on older panel/ring RGB/CCT models.
+    unsupported_prefixes = (
+        "FS",
+        "CB",
+        "MS",
+        "AS",
+        "APOLLO",
+        "HB",
+        "HS",
+        "TL120",
+        "PL",
+    )
+    if any(name_upper.startswith(prefix) for prefix in unsupported_prefixes):
+        return False
+
+    supported_prefixes = (
+        "SL",
+        "SNL",
+        "RGB",
+        "GL",
+        "NL",
+        "SRP",
+        "WRP",
+        "ZRP",
+        "CL124",
+        "ZK-RY",
+        "TL60",
+    )
+    return any(name_upper.startswith(prefix) for prefix in supported_prefixes)
+
+
+def model_supports_extended_scene(light: LightInfo) -> bool:
+    if light.supports_extended_scene is not None:
+        return light.supports_extended_scene
+    return light.infinity_mode in (1, 2) and not light.cct_only
+
+
+def calculate_extended_scene_bytestring(effect: int, args: argparse.Namespace) -> List[int]:
+    brightness = clamp(int(args.bri), 0, 100)
+    bright_min = clamp(int(args.scene_bright_min), 0, 100)
+    bright_max = clamp(int(args.scene_bright_max), 0, 100)
+    temp = clamp(parse_temp_value(int(args.temp)), 25, 100)
+    temp_min = clamp(parse_temp_value(int(args.scene_temp_min)), 25, 100)
+    temp_max = clamp(parse_temp_value(int(args.scene_temp_max)), 25, 100)
+    gm = clamp(int(args.gm) + 50, 0, 100)
+    hue_low, hue_high = _split_hue(int(args.hue))
+    hue_min_low, hue_min_high = _split_hue(int(args.scene_hue_min))
+    hue_max_low, hue_max_high = _split_hue(int(args.scene_hue_max))
+    sat = clamp(int(args.sat), 0, 100)
+    speed = clamp(int(args.scene_speed), 1, 10)
+    sparks = clamp(int(args.scene_sparks), 0, 10)
+    special = clamp(int(args.scene_special), 0, 10)
+
+    payload = [effect]
+
+    if effect == 1:
+        payload.extend([brightness, temp, speed])
+    elif effect in {2, 3, 6, 8}:
+        payload.extend([brightness, temp, gm, speed])
+    elif effect == 4:
+        payload.extend([brightness, temp, gm, speed, sparks])
+    elif effect == 5:
+        payload.extend([bright_min, bright_max, temp, gm, speed])
+    elif effect in {7, 9}:
+        payload.extend([brightness, hue_low, hue_high, sat, speed])
+    elif effect == 10:
+        payload.extend([brightness, special, speed])
+    elif effect == 11:
+        payload.extend([bright_min, bright_max, temp, gm, speed, sparks])
+    elif effect == 12:
+        payload.extend([brightness, hue_min_low, hue_min_high, hue_max_low, hue_max_high, speed])
+    elif effect == 13:
+        payload.extend([brightness, temp_min, temp_max, speed])
+    elif effect == 14:
+        payload = [14, 0, bright_min, bright_max, 0, 0, temp, speed]
+    elif effect == 15:
+        payload = [14, 1, bright_min, bright_max, hue_low, hue_high, 0, speed]
+    elif effect == 16:
+        payload = [15, bright_min, bright_max, temp, gm, speed]
+    elif effect == 17:
+        payload = [16, brightness, special, speed, sparks]
+    elif effect == 18:
+        payload = [17, brightness, special, speed]
+    elif effect == 21:
+        payload.extend([brightness, 2, 5])
+    elif effect == 22:
+        payload.extend([brightness, 75, 50, 5])
+    elif effect == 23:
+        payload.extend([brightness, 0, 0, 55, 0, 10])
+    elif effect == 24:
+        payload.extend([brightness, 49, 0, 20, 1, 8])
+    elif effect == 25:
+        payload.extend([brightness, 1, 10])
+    elif effect == 26:
+        payload.extend([2, brightness, 32, 50, 10, 4])
+    elif effect == 27:
+        payload.extend([brightness, 75, 10])
+    elif effect == 28:
+        payload.extend([brightness, 75, 50, 10])
+    elif effect == 29:
+        payload.extend([2, brightness, 75, 50, 10])
+    else:
+        payload.extend([brightness])
+
+    return [120, 136, len(payload), *payload]
+
+
 def calculate_bytestring(color_mode: str, args: argparse.Namespace) -> List[int]:
     mode = color_mode.upper()
     if mode == "CCT":
@@ -660,6 +816,8 @@ def calculate_bytestring(color_mode: str, args: argparse.Namespace) -> List[int]
 
     if mode in ("ANM", "SCENE"):
         effect = clamp(int(args.scene), 1, 29)
+        if bool(getattr(args, "enable_extended_scene", False)):
+            return calculate_extended_scene_bytestring(effect, args)
         bri = clamp(int(args.bri), 0, 100)
         return [120, 136, 2, effect, bri]
 
@@ -751,6 +909,12 @@ def build_payload_sequence(
         return [(tag_checksum(list(base_command)), False, 0.0)]
 
     if mode == 136:
+        is_extended_scene = len(base_command) > 5
+        if is_extended_scene and not model_supports_extended_scene(light):
+            raise UnsupportedModeError(
+                f"{light.name} does not support extended scene arguments."
+            )
+
         if light.infinity_mode == 1:
             hw_mac = get_hw_mac_for_light(light)
             payload = [120, 145, 6 + (len(base_command) - 2)]
@@ -1041,6 +1205,100 @@ async def send_command_once(
     return True, ""
 
 
+def parse_status_payload(power_payload: Optional[Sequence[int]], channel_payload: Optional[Sequence[int]]) -> Dict[str, Any]:
+    power = "UNKNOWN"
+    channel: Any = "---"
+
+    if power_payload and len(power_payload) > 3:
+        if int(power_payload[3]) == 1:
+            power = "ON"
+        elif int(power_payload[3]) == 2:
+            power = "STBY"
+
+    if channel_payload and len(channel_payload) > 3:
+        channel = int(channel_payload[3])
+
+    return {
+        "power": power,
+        "channel": channel,
+        "power_raw": list(power_payload) if power_payload else [],
+        "channel_raw": list(channel_payload) if channel_payload else [],
+    }
+
+
+async def query_notify_payload(
+    client: BleakClient,
+    command: Sequence[int],
+    expected_type: int,
+    timeout: float,
+    retries: int,
+) -> Optional[List[int]]:
+    seen: List[List[int]] = []
+
+    def _notify_callback(_sender: Any, data: bytearray) -> None:
+        try:
+            seen.append(list(data))
+        except Exception:
+            pass
+
+    await client.start_notify(NOTIFY_LIGHT_UUID, _notify_callback)
+    try:
+        loop = asyncio.get_running_loop()
+        for attempt in range(1, retries + 1):
+            base_idx = len(seen)
+            await client.write_gatt_char(SET_LIGHT_UUID, bytearray(command), response=False)
+
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
+                for payload in seen[base_idx:]:
+                    if len(payload) > 1 and int(payload[1]) == expected_type:
+                        return payload
+                await asyncio.sleep(0.05)
+
+            await asyncio.sleep(min(0.05 * attempt, 0.2))
+    finally:
+        try:
+            await client.stop_notify(NOTIFY_LIGHT_UUID)
+        except Exception:
+            pass
+
+    return None
+
+
+async def query_light_status_once(
+    light: LightInfo, config: AppConfig
+) -> Tuple[bool, str, Dict[str, Any]]:
+    if light.client is None or not light.client.is_connected:
+        return False, "not connected", {}
+    if not config.enable_status_query:
+        return False, "status query feature is disabled", {}
+    if not model_supports_status_query(light):
+        return False, "status query not supported by this model", {}
+
+    try:
+        power_payload = await query_notify_payload(
+            light.client,
+            STATUS_QUERY_POWER,
+            expected_type=2,
+            timeout=config.status_timeout,
+            retries=config.write_retries,
+        )
+        channel_payload = await query_notify_payload(
+            light.client,
+            STATUS_QUERY_CHANNEL,
+            expected_type=1,
+            timeout=config.status_timeout,
+            retries=config.write_retries,
+        )
+    except Exception as exc:  # pragma: no cover - runtime BLE dependent
+        return False, str(exc), {}
+
+    if power_payload is None and channel_payload is None:
+        return False, "status query timed out (no notify response)", {}
+
+    return True, "", parse_status_payload(power_payload, channel_payload)
+
+
 def is_light_connected(light: LightInfo) -> bool:
     return light.client is not None and light.client.is_connected
 
@@ -1115,6 +1373,77 @@ async def send_command_adaptive(
     return failures
 
 
+async def query_status_adaptive(
+    lights: Sequence[LightInfo],
+    config: AppConfig,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
+    pending: Dict[str, LightInfo] = {light.address: light for light in lights}
+    failures: Dict[str, str] = {}
+    statuses: Dict[str, Dict[str, Any]] = {}
+
+    for attempt in range(1, config.passes + 1):
+        if not pending:
+            break
+
+        current_targets = list(pending.values())
+        ready, connect_failures = await connect_targets(current_targets, config)
+
+        retry_next: Dict[str, LightInfo] = {}
+        for address, reason in connect_failures.items():
+            failures[address] = reason
+            light = pending.get(address)
+            if light is not None:
+                retry_next[address] = light
+
+        if ready:
+            log(
+                f"Querying status attempt {attempt}/{config.passes} "
+                f"for {len(ready)} light(s)..."
+            )
+            query_results = await run_bounded(
+                ready,
+                config.parallel,
+                lambda light: query_light_status_once(light, config),
+            )
+
+            for light, (ok, err, status_info) in zip(ready, query_results):
+                if ok:
+                    failures.pop(light.address, None)
+                    statuses[light.address] = status_info
+                    if config.debug:
+                        log(
+                            f"STATUS OK {light.name} ({light.address}) :: "
+                            f"power={status_info.get('power')} channel={status_info.get('channel')}",
+                            debug=True,
+                            enabled=True,
+                        )
+                else:
+                    failures[light.address] = f"{light.name}: {err or 'status query failed'}"
+                    if "not supported" not in (err or "").lower():
+                        retry_next[light.address] = light
+
+        pending = retry_next
+
+    return statuses, failures
+
+
+def print_status_table(lights: Sequence[LightInfo], status_map: Dict[str, Dict[str, Any]]) -> None:
+    if not status_map:
+        print("No status responses received.")
+        return
+
+    print("ADDRESS              NAME               POWER  CHANNEL")
+    print("-------------------  -----------------  -----  -------")
+    by_address = {light.address: light for light in lights}
+    for address in sorted(status_map.keys()):
+        status = status_map[address]
+        light = by_address.get(address)
+        name = (light.name if light else address)[:17]
+        power = str(status.get("power", "UNKNOWN"))
+        channel = str(status.get("channel", "---"))
+        print(f"{address:<19}  {name:<17}  {power:<5}  {channel:<7}")
+
+
 def format_status_command(base_command: Sequence[int]) -> str:
     mode = base_command[1]
     if mode == 129:
@@ -1146,6 +1475,9 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         settle_delay=max(0.0, float(args.settle_ms) / 1000.0),
         power_with_response=not bool(args.no_response),
         resolve_timeout=max(0.0, float(args.resolve_timeout)),
+        enable_status_query=bool(args.enable_status_query),
+        enable_extended_scene=bool(args.enable_extended_scene),
+        status_timeout=max(0.1, float(args.status_timeout)),
     )
 
 
@@ -1170,6 +1502,16 @@ def apply_command_overrides(
         "temperature": "temp",
         "effect": "scene",
         "power": "on",
+        "bright_min": "scene_bright_min",
+        "bright_max": "scene_bright_max",
+        "temp_min": "scene_temp_min",
+        "temp_max": "scene_temp_max",
+        "hue_min": "scene_hue_min",
+        "hue_max": "scene_hue_max",
+        "speed": "scene_speed",
+        "sparks": "scene_sparks",
+        "special_options": "scene_special",
+        "specialoptions": "scene_special",
     }
 
     for raw_key, raw_value in overrides.items():
@@ -1444,8 +1786,7 @@ async def async_main(args: argparse.Namespace, argv: Sequence[str]) -> int:
     if args.mode:
         args.mode = str(args.mode).upper()
 
-    if args.on and args.off:
-        raise ConfigError("--on and --off are mutually exclusive")
+    validate_runtime_args(args)
     if not args.list and not args.light:
         raise ConfigError("--light is required unless using --list or a preset sets lights")
 
@@ -1507,6 +1848,22 @@ async def async_main(args: argparse.Namespace, argv: Sequence[str]) -> int:
         log("Some requested lights were not found:")
         for addr in missing:
             print(f"- {addr}")
+
+    if args.status:
+        status_map, status_failures = await query_status_adaptive(lights, config)
+        connected = [light for light in lights if is_light_connected(light)]
+        if connected:
+            await run_bounded(
+                connected, config.parallel, lambda light: disconnect_light(light, config)
+            )
+
+        print_status_table(lights, status_map)
+        if status_failures:
+            log("Status query failed for some lights:")
+            for address, reason in status_failures.items():
+                print(f"- {address} :: {reason}")
+            return 2
+        return 0 if not missing else 2
 
     if args.serve:
         return await run_serve_mode(lights, args, config, config_data, groups_cfg)
@@ -1574,6 +1931,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip BLE scan and connect directly to configured MAC addresses",
     )
     parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Query power/channel status instead of sending a control command",
+    )
+    parser.add_argument(
         "--serve",
         action="store_true",
         help="Keep BLE connections open and accept live commands from stdin",
@@ -1598,6 +1960,60 @@ def build_parser() -> argparse.ArgumentParser:
         help="GM compensation (-50 to 50); internally shifted by +50",
     )
     parser.add_argument("--scene", default=1, type=int, help="Scene/effect index (1-29)")
+    parser.add_argument(
+        "--scene-bright-min",
+        default=0,
+        type=int,
+        help="Extended scene: minimum brightness (0-100)",
+    )
+    parser.add_argument(
+        "--scene-bright-max",
+        default=100,
+        type=int,
+        help="Extended scene: maximum brightness (0-100)",
+    )
+    parser.add_argument(
+        "--scene-temp-min",
+        default=3200,
+        type=int,
+        help="Extended scene: minimum CCT (for example 3200 or 32)",
+    )
+    parser.add_argument(
+        "--scene-temp-max",
+        default=5600,
+        type=int,
+        help="Extended scene: maximum CCT (for example 5600 or 56)",
+    )
+    parser.add_argument(
+        "--scene-hue-min",
+        default=0,
+        type=int,
+        help="Extended scene: minimum hue (0-360)",
+    )
+    parser.add_argument(
+        "--scene-hue-max",
+        default=360,
+        type=int,
+        help="Extended scene: maximum hue (0-360)",
+    )
+    parser.add_argument(
+        "--scene-speed",
+        default=5,
+        type=int,
+        help="Extended scene: speed parameter (1-10)",
+    )
+    parser.add_argument(
+        "--scene-sparks",
+        default=0,
+        type=int,
+        help="Extended scene: sparks parameter (0-10)",
+    )
+    parser.add_argument(
+        "--scene-special",
+        default=1,
+        type=int,
+        help="Extended scene: special option parameter (0-10)",
+    )
 
     parser.add_argument("--scan-timeout", default=8.0, type=float)
     parser.add_argument("--scan-attempts", default=3, type=int)
@@ -1606,6 +2022,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=2.0,
         type=float,
         help="Short scan timeout used to resolve BLE handles for --skip-discovery",
+    )
+    parser.add_argument(
+        "--status-timeout",
+        default=1.0,
+        type=float,
+        help="Timeout (seconds) waiting for status-query notify responses",
     )
     parser.add_argument("--connect-timeout", default=12.0, type=float)
     parser.add_argument("--connect-retries", default=3, type=int)
@@ -1625,6 +2047,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use write-without-response for power commands (faster, less reliable)",
     )
+    parser.add_argument(
+        "--enable-status-query",
+        action="store_true",
+        help="Enable experimental status query protocol commands",
+    )
+    parser.add_argument(
+        "--enable-extended-scene",
+        action="store_true",
+        help="Enable experimental extended scene argument payloads on supported models",
+    )
     parser.add_argument("--debug", action="store_true", help="Verbose debug output")
 
     return parser
@@ -1635,6 +2067,17 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--on and --off are mutually exclusive")
     if args.mode:
         args.mode = str(args.mode).upper()
+
+
+def validate_runtime_args(args: argparse.Namespace) -> None:
+    if args.on and args.off:
+        raise ConfigError("--on and --off are mutually exclusive")
+    if args.status and args.serve:
+        raise ConfigError("--status and --serve are mutually exclusive")
+    if args.status and (args.on or args.off):
+        raise ConfigError("--status cannot be combined with --on/--off")
+    if args.status and not args.enable_status_query:
+        raise ConfigError("--status requires --enable-status-query")
 
 
 def main() -> int:
