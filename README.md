@@ -1,5 +1,8 @@
 # neewer-cli
 
+[![CI](https://github.com/SergeDubovsky/neewer-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/SergeDubovsky/neewer-cli/actions/workflows/ci.yml)
+[![Release](https://github.com/SergeDubovsky/neewer-cli/actions/workflows/release.yml/badge.svg)](https://github.com/SergeDubovsky/neewer-cli/actions/workflows/release.yml)
+
 Standalone Neewer BLE command-line utility focused on fast and reliable control.
 
 ## Attribution
