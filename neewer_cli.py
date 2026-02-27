@@ -16,23 +16,25 @@ import argparse
 import asyncio
 import json
 import os
+import shlex
 import sys
 import time
 from importlib import metadata as importlib_metadata
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 _BLEAK_IMPORT_ERROR: Optional[Exception] = None
 try:
     from bleak import BleakClient, BleakScanner
 except ModuleNotFoundError as exc:
     # Keep module importable for unit tests and non-BLE code paths.
-    BleakClient = None  # type: ignore[assignment]
-    BleakScanner = None  # type: ignore[assignment]
+    BleakClient = None  # type: ignore[assignment,misc]
+    BleakScanner = None  # type: ignore[assignment,misc]
     _BLEAK_IMPORT_ERROR = exc
 
 
 SET_LIGHT_UUID = "69400002-B5A3-F393-E0A9-E50E24DCCA99"
+NEEWER_SERVICE_UUID = "69400001-B5A3-F393-E0A9-E50E24DCCA99"
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.neewer")
 
 # (needle in raw device name, corrected model name)
@@ -154,6 +156,7 @@ class AppConfig:
     parallel: int
     settle_delay: float
     power_with_response: bool
+    resolve_timeout: float = 2.0
 
 
 class UnsupportedModeError(RuntimeError):
@@ -188,6 +191,21 @@ def log(msg: str, debug: bool = False, enabled: bool = True) -> None:
 
 def normalize_address(addr: str) -> str:
     return addr.strip().upper()
+
+
+def validate_mac_address(mac_address: str, context: str = "MAC address") -> str:
+    normalized = normalize_address(mac_address)
+    parts = normalized.split(":")
+    if len(parts) != 6:
+        raise ConfigError(f"Invalid {context} '{mac_address}': expected 6 octets")
+    for part in parts:
+        if len(part) != 2:
+            raise ConfigError(f"Invalid {context} '{mac_address}': octets must be 2 hex chars")
+        try:
+            int(part, 16)
+        except ValueError as exc:
+            raise ConfigError(f"Invalid {context} '{mac_address}': non-hex octet '{part}'") from exc
+    return normalized
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -233,20 +251,24 @@ def _normalize_lights_block(raw_lights: Any) -> Dict[str, Dict[str, Any]]:
         normalized: Dict[str, Dict[str, Any]] = {}
         for key, value in raw_lights.items():
             if not isinstance(value, dict):
-                value = {}
-            normalized[normalize_address(str(key))] = value
+                raise ConfigError(
+                    f"'lights.{key}' must be an object with metadata fields (for example: name)"
+                )
+            normalized[validate_mac_address(str(key), context="light address key")] = value
         return normalized
     if isinstance(raw_lights, list):
         normalized = {}
-        for row in raw_lights:
+        for idx, row in enumerate(raw_lights):
             if not isinstance(row, dict):
-                continue
+                raise ConfigError(f"'lights[{idx}]' must be an object")
             address = row.get("address")
             if not address:
-                continue
+                raise ConfigError(f"'lights[{idx}]' is missing required field 'address'")
             row_copy = dict(row)
             row_copy.pop("address", None)
-            normalized[normalize_address(str(address))] = row_copy
+            normalized[
+                validate_mac_address(str(address), context=f"lights[{idx}].address")
+            ] = row_copy
         return normalized
     raise ConfigError("'lights' must be an object or array")
 
@@ -262,15 +284,26 @@ def _normalize_groups_block(raw_groups: Any) -> Dict[str, List[str]]:
         if isinstance(members, str):
             members = [x.strip() for x in members.split(",") if x.strip()]
         if not isinstance(members, list):
-            continue
-        normalized[key] = [normalize_address(str(m)) for m in members if str(m).strip()]
+            raise ConfigError(f"'groups.{key}' must be a list or comma-separated string")
+        parsed_members: List[str] = []
+        for idx, member in enumerate(members):
+            text = str(member).strip()
+            if not text:
+                raise ConfigError(f"'groups.{key}[{idx}]' must not be empty")
+            parsed_members.append(
+                validate_mac_address(text, context=f"groups.{key}[{idx}]")
+            )
+        normalized[key] = parsed_members
     return normalized
 
 
 def _load_config_file(path: str) -> Dict[str, Any]:
     ext = os.path.splitext(path)[1].lower()
-    with open(path, "r", encoding="utf-8") as fh:
-        text = fh.read()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        raise ConfigError(f"Unable to read config file '{path}': {exc}") from exc
 
     if ext in {".yaml", ".yml"}:
         try:
@@ -279,9 +312,15 @@ def _load_config_file(path: str) -> Dict[str, Any]:
             raise ConfigError(
                 "YAML config requires PyYAML (pip install pyyaml) or use JSON config."
             ) from exc
-        parsed = yaml.safe_load(text)
+        try:
+            parsed = yaml.safe_load(text)
+        except Exception as exc:
+            raise ConfigError(f"Invalid YAML config '{path}': {exc}") from exc
     else:
-        parsed = json.loads(text)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"Invalid JSON config '{path}': {exc.msg} at line {exc.lineno}") from exc
 
     if parsed is None:
         return {}
@@ -319,11 +358,11 @@ def load_user_config(path: str, debug: bool) -> Dict[str, Any]:
 
 def selector_to_addresses(
     selector: str, groups: Dict[str, List[str]]
-) -> Optional[set]:
+) -> Optional[Set[str]]:
     if selector.strip() == "" or selector.upper() in {"ALL", "*"}:
         return None
 
-    resolved: set = set()
+    resolved: Set[str] = set()
     for token in [x.strip() for x in selector.split(",") if x.strip()]:
         if token.lower().startswith("group:"):
             group_name = token.split(":", 1)[1]
@@ -331,7 +370,7 @@ def selector_to_addresses(
                 raise ConfigError(f"Unknown group '{group_name}' in light selector")
             resolved.update(groups[group_name])
         else:
-            resolved.add(normalize_address(token))
+            resolved.add(validate_mac_address(token, context="light selector address"))
     return resolved
 
 
@@ -406,7 +445,8 @@ def apply_preset_from_config(
     for raw_key, value in preset.items():
         if raw_key == "per_light":
             continue
-        key = alias_map.get(raw_key, raw_key).replace("-", "_")
+        raw_key_text = str(raw_key)
+        key = alias_map.get(raw_key_text, raw_key_text).replace("-", "_")
         if key == "lights":
             if _arg_present(argv, "light"):
                 continue
@@ -420,9 +460,9 @@ def apply_preset_from_config(
             if _arg_present(argv, "on") or _arg_present(argv, "off"):
                 continue
             if isinstance(value, str):
-                normalized = value.strip().upper()
-                args.on = normalized in {"ON", "1", "TRUE"}
-                args.off = normalized in {"OFF", "0", "FALSE"}
+                normalized_power = value.strip().upper()
+                args.on = normalized_power in {"ON", "1", "TRUE"}
+                args.off = normalized_power in {"OFF", "0", "FALSE"}
             else:
                 args.on = _to_bool(value, False)
                 args.off = not args.on
@@ -445,7 +485,7 @@ def apply_preset_from_config(
 
 
 def get_static_lights_from_config(
-    target_addresses: Optional[set],
+    target_addresses: Optional[Set[str]],
     lights_cfg: Dict[str, Dict[str, Any]],
 ) -> Tuple[List[LightInfo], List[str]]:
     if target_addresses is None:
@@ -458,12 +498,12 @@ def get_static_lights_from_config(
         addresses = sorted(target_addresses)
 
     lights: List[LightInfo] = []
-    missing: List[str] = []
+    unconfigured: List[str] = []
 
     for address in addresses:
         meta = lights_cfg.get(address)
         if meta is None:
-            missing.append(address)
+            unconfigured.append(address)
             meta = {}
 
         name = str(meta.get("name") or "Configured Light")
@@ -489,7 +529,7 @@ def get_static_lights_from_config(
             )
         )
 
-    return lights, missing
+    return lights, unconfigured
 
 
 def merge_light_metadata_from_config(
@@ -519,17 +559,23 @@ def get_corrected_name(light_name: str) -> str:
     return light_name
 
 
+def _find_light_specs_entry(light_name: str) -> Optional[Tuple[str, int, int, bool, int]]:
+    for entry in reversed(MASTER_LIGHT_SPECS):
+        if entry[0] in light_name:
+            return entry
+    return None
+
+
 def get_light_specs(light_name: str) -> Tuple[List[int], bool, int]:
     cct_bounds = [3200, 5600]
     cct_only = False
     infinity_mode = 0
 
-    for entry in reversed(MASTER_LIGHT_SPECS):
-        if entry[0] in light_name:
-            cct_bounds = [entry[1], entry[2]]
-            cct_only = entry[3]
-            infinity_mode = entry[4]
-            break
+    entry = _find_light_specs_entry(light_name)
+    if entry is not None:
+        cct_bounds = [entry[1], entry[2]]
+        cct_only = entry[3]
+        infinity_mode = entry[4]
     return cct_bounds, cct_only, infinity_mode
 
 
@@ -537,7 +583,7 @@ def is_neewer_device(name: Optional[str]) -> bool:
     if not name:
         return False
     upper_name = name.upper()
-    return any(prefix in upper_name for prefix in ACCEPTED_NAME_PREFIXES)
+    return any(upper_name.startswith(prefix) for prefix in ACCEPTED_NAME_PREFIXES)
 
 
 def split_mac_address(mac_address: str) -> List[int]:
@@ -563,7 +609,7 @@ def clamp(value: int, low: int, high: int) -> int:
 
 def parse_temp_value(temp_raw: int) -> int:
     temp = int(temp_raw)
-    if temp >= 100:
+    if temp >= 1000:
         # Accept values like 5600 and convert to 56 to match protocol payload.
         temp = int(round(temp / 100.0))
     return temp
@@ -657,9 +703,9 @@ def build_payload_sequence(
 
     if mode == 129:
         if light.infinity_mode == 1:
-            power_on = int(base_command[3]) == 1
+            is_power_on = int(base_command[3]) == 1
             hw_mac = get_hw_mac_for_light(light)
-            payload = tag_checksum(get_infinity_power_bytestring(power_on, hw_mac))
+            payload = tag_checksum(get_infinity_power_bytestring(is_power_on, hw_mac))
             return [(payload, power_with_response, 0.0)]
         payload = tag_checksum(list(base_command))
         return [(payload, power_with_response, 0.0)]
@@ -713,10 +759,10 @@ def build_payload_sequence(
             payload.extend(base_command[4:])
 
             power_off = tag_checksum(get_infinity_power_bytestring(False, hw_mac))
-            power_on = tag_checksum(get_infinity_power_bytestring(True, hw_mac))
+            power_on_packet = tag_checksum(get_infinity_power_bytestring(True, hw_mac))
             return [
                 (power_off, False, 0.05),
-                (power_on, False, 0.05),
+                (power_on_packet, False, 0.05),
                 (tag_checksum(payload), False, 0.0),
             ]
 
@@ -735,8 +781,36 @@ def build_payload_sequence(
     raise ValueError(f"Unsupported command mode byte: {mode}")
 
 
+def validate_base_command_for_light(light: LightInfo, base_command: Sequence[int]) -> None:
+    mode = int(base_command[1])
+    if mode != 135:
+        return
+
+    entry = _find_light_specs_entry(light.name)
+    if entry is None:
+        return
+
+    min_temp = clamp(parse_temp_value(entry[1]), 25, 100)
+    max_temp = clamp(parse_temp_value(entry[2]), 25, 100)
+    if max_temp < min_temp:
+        min_temp, max_temp = max_temp, min_temp
+
+    temp = int(base_command[4])
+    if min_temp <= temp <= max_temp:
+        return
+
+    if min_temp == max_temp:
+        supported = f"{min_temp}00K"
+    else:
+        supported = f"{min_temp}00K-{max_temp}00K"
+
+    raise UnsupportedModeError(
+        f"{light.name} supports CCT {supported}, got {temp}00K."
+    )
+
+
 async def discover_devices(
-    scan_timeout: float, target_addresses: Optional[set], debug: bool
+    scan_timeout: float, target_addresses: Optional[Set[str]], debug: bool
 ) -> Dict[str, LightInfo]:
     ensure_bleak_available()
     discovered: Dict[str, LightInfo] = {}
@@ -782,7 +856,7 @@ async def discover_devices(
 
 
 async def discover_with_retries(
-    config: AppConfig, target_addresses: Optional[set]
+    config: AppConfig, target_addresses: Optional[Set[str]], collect_all: bool = False
 ) -> Tuple[List[LightInfo], List[str]]:
     collected: Dict[str, LightInfo] = {}
     missing: List[str] = []
@@ -802,12 +876,47 @@ async def discover_with_retries(
             if attempt < config.scan_attempts:
                 log(f"Still missing {len(missing)} target device(s), retrying...", enabled=True)
         else:
-            if collected:
+            if collected and not collect_all:
                 break
 
     if target_addresses is not None:
         missing = sorted(addr for addr in target_addresses if addr not in collected)
     return list(collected.values()), missing
+
+
+async def resolve_static_ble_devices(lights: Sequence[LightInfo], config: AppConfig) -> None:
+    if not lights or config.resolve_timeout <= 0:
+        return
+
+    target_addresses = {light.address for light in lights}
+    log(
+        "Resolving BLE handles for configured lights "
+        f"(timeout={config.resolve_timeout:.1f}s)...",
+        debug=True,
+        enabled=config.debug,
+    )
+    found = await discover_devices(config.resolve_timeout, target_addresses, config.debug)
+
+    resolved = 0
+    for light in lights:
+        match = found.get(light.address)
+        if match is None or match.ble_device is None:
+            continue
+        light.ble_device = match.ble_device
+        light.rssi = match.rssi
+        light.realname = match.realname
+        if light.name in {"Configured Light", "Unknown", ""}:
+            light.name = match.name
+        resolved += 1
+
+    if config.debug:
+        unresolved = len(lights) - resolved
+        log(
+            f"Resolved BLE handles for {resolved}/{len(lights)} configured light(s). "
+            f"Unresolved: {unresolved} (fallback to direct address connect).",
+            debug=True,
+            enabled=True,
+        )
 
 
 async def connect_light(light: LightInfo, config: AppConfig) -> Tuple[bool, str]:
@@ -824,7 +933,10 @@ async def connect_light(light: LightInfo, config: AppConfig) -> Tuple[bool, str]
                 debug=True,
                 enabled=config.debug,
             )
-            client = BleakClient(target, timeout=config.connect_timeout)
+            client_kwargs: Dict[str, Any] = {"timeout": config.connect_timeout}
+            if light.ble_device is not None:
+                client_kwargs["services"] = [NEEWER_SERVICE_UUID]
+            client = BleakClient(target, **client_kwargs)
             await client.connect()
             if not client.is_connected:
                 raise RuntimeError("connect() completed but client is not connected")
@@ -906,12 +1018,13 @@ async def send_command_once(
         return False, "not connected"
 
     try:
+        validate_base_command_for_light(light, base_command)
         payload_sequence = build_payload_sequence(
             light, base_command, power_with_response=config.power_with_response
         )
     except UnsupportedModeError as exc:
         return False, str(exc)
-    except Exception as exc:
+    except ValueError as exc:
         return False, str(exc)
 
     for payload, response, extra_delay in payload_sequence:
@@ -928,6 +1041,80 @@ async def send_command_once(
     return True, ""
 
 
+def is_light_connected(light: LightInfo) -> bool:
+    return light.client is not None and light.client.is_connected
+
+
+async def connect_targets(
+    lights: Sequence[LightInfo], config: AppConfig
+) -> Tuple[List[LightInfo], Dict[str, str]]:
+    to_connect = [light for light in lights if not is_light_connected(light)]
+    connect_failures: Dict[str, str] = {}
+
+    if to_connect:
+        connection_results = await run_bounded(
+            to_connect, config.parallel, lambda light: connect_light(light, config)
+        )
+        for light, (ok, err) in zip(to_connect, connection_results):
+            if not ok:
+                connect_failures[light.address] = f"{light.name}: {err or 'unknown connect error'}"
+
+    ready = [light for light in lights if is_light_connected(light)]
+    return ready, connect_failures
+
+
+async def send_command_adaptive(
+    lights: Sequence[LightInfo],
+    base_command: Sequence[int],
+    per_light_commands: Dict[str, List[int]],
+    config: AppConfig,
+) -> Dict[str, str]:
+    pending: Dict[str, LightInfo] = {light.address: light for light in lights}
+    failures: Dict[str, str] = {}
+
+    for attempt in range(1, config.passes + 1):
+        if not pending:
+            break
+
+        current_targets = list(pending.values())
+        ready, connect_failures = await connect_targets(current_targets, config)
+
+        retry_next: Dict[str, LightInfo] = {}
+        for address, reason in connect_failures.items():
+            failures[address] = reason
+            light = pending.get(address)
+            if light is not None:
+                retry_next[address] = light
+
+        if ready:
+            log(f"Sending attempt {attempt}/{config.passes} to {len(ready)} light(s)...")
+            send_results = await run_bounded(
+                ready,
+                config.parallel,
+                lambda light: send_command_once(
+                    light, per_light_commands.get(light.address, base_command), config
+                ),
+            )
+            for light, (ok, err) in zip(ready, send_results):
+                if ok:
+                    failures.pop(light.address, None)
+                    if config.debug:
+                        current_command = per_light_commands.get(light.address, base_command)
+                        log(
+                            f"WRITE OK {light.name} ({light.address}) :: "
+                            f"{format_status_command(current_command)}",
+                            debug=True,
+                            enabled=True,
+                        )
+                else:
+                    failures[light.address] = f"{light.name}: {err or 'write failed'}"
+                    retry_next[light.address] = light
+
+        pending = retry_next
+
+    return failures
+
+
 def format_status_command(base_command: Sequence[int]) -> str:
     mode = base_command[1]
     if mode == 129:
@@ -942,7 +1129,7 @@ def format_status_command(base_command: Sequence[int]) -> str:
     return f"RAW {list(base_command)}"
 
 
-def parse_addresses(light_arg: str, groups: Dict[str, List[str]]) -> Optional[set]:
+def parse_addresses(light_arg: str, groups: Dict[str, List[str]]) -> Optional[Set[str]]:
     return selector_to_addresses(light_arg, groups)
 
 
@@ -958,6 +1145,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         parallel=max(1, int(args.parallel)),
         settle_delay=max(0.0, float(args.settle_ms) / 1000.0),
         power_with_response=not bool(args.no_response),
+        resolve_timeout=max(0.0, float(args.resolve_timeout)),
     )
 
 
@@ -1045,10 +1233,213 @@ def print_device_table(lights: Sequence[LightInfo]) -> None:
         )
 
 
-async def async_main(args: argparse.Namespace) -> int:
+def build_serve_command(
+    line: str,
+    base_args: argparse.Namespace,
+    config_data: Dict[str, Any],
+    groups_cfg: Dict[str, List[str]],
+) -> Tuple[Optional[Set[str]], List[int], Dict[str, List[int]], str]:
+    tokens = shlex.split(line)
+    if not tokens:
+        raise ConfigError("Empty command.")
+
+    cmd = tokens[0].lower()
+
+    if cmd == "preset":
+        if len(tokens) != 2:
+            raise ConfigError("Usage: preset <name>")
+        temp_args = argparse.Namespace(**vars(base_args))
+        temp_args.on = False
+        temp_args.off = False
+        temp_args.preset = tokens[1]
+        temp_args._per_light_preset = {}
+        apply_preset_from_config(temp_args, config_data, [])
+        if temp_args.mode:
+            temp_args.mode = str(temp_args.mode).upper()
+        base_command = build_base_command(temp_args)
+        per_light_commands = build_per_light_command_map(temp_args)
+        target_addresses = parse_addresses(temp_args.light, groups_cfg)
+        description = f"Preset '{tokens[1]}'"
+        return target_addresses, base_command, per_light_commands, description
+
+    temp_args = argparse.Namespace(**vars(base_args))
+    temp_args._per_light_preset = {}
+    temp_args.preset = ""
+
+    if cmd == "on":
+        if len(tokens) != 1:
+            raise ConfigError("Usage: on")
+        temp_args.on = True
+        temp_args.off = False
+        base_command = build_base_command(temp_args)
+        return None, base_command, {}, "Power ON"
+
+    if cmd == "off":
+        if len(tokens) != 1:
+            raise ConfigError("Usage: off")
+        temp_args.on = False
+        temp_args.off = True
+        base_command = build_base_command(temp_args)
+        return None, base_command, {}, "Power OFF"
+
+    if cmd == "cct":
+        if len(tokens) not in {3, 4}:
+            raise ConfigError("Usage: cct <temp> <bri> [gm]")
+        temp_args.on = False
+        temp_args.off = False
+        temp_args.mode = "CCT"
+        temp_args.temp = _to_int(tokens[1], temp_args.temp)
+        temp_args.bri = _to_int(tokens[2], temp_args.bri)
+        temp_args.gm = _to_int(tokens[3], 0) if len(tokens) == 4 else 0
+        base_command = build_base_command(temp_args)
+        return None, base_command, {}, format_status_command(base_command)
+
+    if cmd == "hsi":
+        if len(tokens) != 4:
+            raise ConfigError("Usage: hsi <hue> <sat> <bri>")
+        temp_args.on = False
+        temp_args.off = False
+        temp_args.mode = "HSI"
+        temp_args.hue = _to_int(tokens[1], temp_args.hue)
+        temp_args.sat = _to_int(tokens[2], temp_args.sat)
+        temp_args.bri = _to_int(tokens[3], temp_args.bri)
+        base_command = build_base_command(temp_args)
+        return None, base_command, {}, format_status_command(base_command)
+
+    if cmd in {"scene", "anm"}:
+        if len(tokens) != 3:
+            raise ConfigError("Usage: scene <effect> <bri>")
+        temp_args.on = False
+        temp_args.off = False
+        temp_args.mode = "SCENE"
+        temp_args.scene = _to_int(tokens[1], temp_args.scene)
+        temp_args.bri = _to_int(tokens[2], temp_args.bri)
+        base_command = build_base_command(temp_args)
+        return None, base_command, {}, format_status_command(base_command)
+
+    raise ConfigError(
+        "Unknown serve command. Supported: on, off, cct, hsi, scene, preset, help, exit."
+    )
+
+
+def select_session_lights(
+    session_lights: Sequence[LightInfo], target_addresses: Optional[Set[str]]
+) -> Tuple[List[LightInfo], List[str]]:
+    if target_addresses is None:
+        return list(session_lights), []
+
+    by_address = {light.address: light for light in session_lights}
+    selected: List[LightInfo] = []
+    missing: List[str] = []
+    for address in sorted(target_addresses):
+        light = by_address.get(address)
+        if light is None:
+            missing.append(address)
+        else:
+            selected.append(light)
+    return selected, missing
+
+
+async def run_serve_mode(
+    session_lights: Sequence[LightInfo],
+    base_args: argparse.Namespace,
+    config: AppConfig,
+    config_data: Dict[str, Any],
+    groups_cfg: Dict[str, List[str]],
+) -> int:
+    ready, connect_failures = await connect_targets(session_lights, config)
+    exit_code = 0
+    if connect_failures:
+        exit_code = 2
+        log("Failed to connect to some lights:")
+        for address, reason in connect_failures.items():
+            print(f"- {address} :: {reason}")
+    if not ready:
+        return 2
+
+    names = ", ".join(f"{light.name}({light.address})" for light in ready)
+    log(f"Serve mode ready. Connected lights: {names}")
+    print(
+        "Commands: on | off | cct <temp> <bri> [gm] | hsi <hue> <sat> <bri> | "
+        "scene <fx> <bri> | preset <name> | help | exit"
+    )
+
+    try:
+        while True:
+            try:
+                line = await asyncio.to_thread(input, "neewer> ")
+            except EOFError:
+                break
+
+            command = line.strip()
+            if not command:
+                continue
+
+            lower = command.lower()
+            if lower in {"exit", "quit"}:
+                break
+            if lower in {"help", "?"}:
+                print(
+                    "Commands: on | off | cct <temp> <bri> [gm] | hsi <hue> <sat> <bri> | "
+                    "scene <fx> <bri> | preset <name> | help | exit"
+                )
+                continue
+
+            try:
+                target_addresses, base_command, per_light_commands, description = (
+                    build_serve_command(command, base_args, config_data, groups_cfg)
+                )
+            except ConfigError as exc:
+                print(f"[ERROR] {exc}")
+                continue
+
+            target_lights, target_missing = select_session_lights(
+                session_lights, target_addresses
+            )
+            if target_missing:
+                log("Command references lights not in this serve session:")
+                for address in target_missing:
+                    print(f"- {address}")
+            if not target_lights:
+                continue
+
+            if per_light_commands:
+                log(
+                    f"{description} defines per-light commands for "
+                    f"{len(per_light_commands)} light(s)."
+                )
+            else:
+                log(f"Command: {description}")
+
+            send_failures = await send_command_adaptive(
+                target_lights, base_command, per_light_commands, config
+            )
+            if send_failures:
+                exit_code = 2
+                log("Command failed for some lights:")
+                for address, reason in send_failures.items():
+                    print(f"- {address} :: {reason}")
+            else:
+                names = ", ".join(
+                    f"{light.name}({light.address})" for light in target_lights
+                )
+                log(
+                    f"Command sent successfully to {len(target_lights)} light(s): {names}"
+                )
+    finally:
+        connected = [light for light in session_lights if is_light_connected(light)]
+        if connected:
+            await run_bounded(
+                connected, config.parallel, lambda light: disconnect_light(light, config)
+            )
+
+    return exit_code
+
+
+async def async_main(args: argparse.Namespace, argv: Sequence[str]) -> int:
     config_data = load_user_config(args.config, args.debug)
-    apply_defaults_from_config(args, config_data, sys.argv[1:])
-    apply_preset_from_config(args, config_data, sys.argv[1:])
+    apply_defaults_from_config(args, config_data, argv)
+    apply_preset_from_config(args, config_data, argv)
 
     if args.mode:
         args.mode = str(args.mode).upper()
@@ -1073,15 +1464,20 @@ async def async_main(args: argparse.Namespace) -> int:
             enabled=config.debug,
         )
 
+    missing: List[str] = []
+    unconfigured: List[str] = []
     if use_skip_discovery:
-        lights, missing = get_static_lights_from_config(target_addresses, lights_cfg)
+        lights, unconfigured = get_static_lights_from_config(target_addresses, lights_cfg)
         log(
             f"Skipping BLE discovery. Using configured addresses only ({len(lights)} light(s)).",
             debug=True,
             enabled=config.debug,
         )
+        await resolve_static_ble_devices(lights, config)
     else:
-        lights, missing = await discover_with_retries(config, target_addresses)
+        lights, missing = await discover_with_retries(
+            config, target_addresses, collect_all=bool(args.list)
+        )
         if lights_cfg:
             merge_light_metadata_from_config(lights, lights_cfg)
 
@@ -1092,16 +1488,28 @@ async def async_main(args: argparse.Namespace) -> int:
             for addr in missing:
                 print(f"- {addr}")
             return 2
+        if unconfigured:
+            print("\nAddress(es) missing config metadata (using generic defaults):")
+            for addr in unconfigured:
+                print(f"- {addr}")
         return 0 if lights else 1
 
     if not lights:
         log("No target lights discovered.")
         return 1
 
+    if unconfigured:
+        log("Some target addresses are missing config metadata; using generic defaults:")
+        for addr in unconfigured:
+            print(f"- {addr}")
+
     if missing:
         log("Some requested lights were not found:")
         for addr in missing:
             print(f"- {addr}")
+
+    if args.serve:
+        return await run_serve_mode(lights, args, config, config_data, groups_cfg)
 
     base_command = build_base_command(args)
     per_light_commands = build_per_light_command_map(args)
@@ -1113,60 +1521,30 @@ async def async_main(args: argparse.Namespace) -> int:
     else:
         log(f"Command: {format_status_command(base_command)}")
 
-    connection_results = await run_bounded(
-        lights, config.parallel, lambda light: connect_light(light, config)
-    )
-
-    connected: List[LightInfo] = []
-    connect_failures: List[Tuple[LightInfo, str]] = []
-
-    for light, (ok, err) in zip(lights, connection_results):
-        if ok:
-            connected.append(light)
-        else:
-            connect_failures.append((light, err))
-
-    if connect_failures:
-        log("Failed to connect to some lights:")
-        for light, err in connect_failures:
-            print(f"- {light.address} [{light.name}] :: {err or 'unknown connect error'}")
-
-    if not connected:
-        return 1
-
-    send_failures: Dict[str, str] = {}
-    for current_pass in range(1, config.passes + 1):
-        log(f"Sending pass {current_pass}/{config.passes}...")
-        send_results = await run_bounded(
-            connected,
-            config.parallel,
-            lambda light: send_command_once(
-                light, per_light_commands.get(light.address, base_command), config
-            ),
+    send_failures = await send_command_adaptive(lights, base_command, per_light_commands, config)
+    connected = [light for light in lights if is_light_connected(light)]
+    if connected:
+        await run_bounded(
+            connected, config.parallel, lambda light: disconnect_light(light, config)
         )
-        for light, (ok, err) in zip(connected, send_results):
-            if not ok:
-                send_failures[light.address] = f"{light.name}: {err or 'write failed'}"
-            elif config.debug:
-                current_command = per_light_commands.get(light.address, base_command)
-                log(
-                    f"WRITE OK {light.name} ({light.address}) :: "
-                    f"{format_status_command(current_command)}",
-                    debug=True,
-                    enabled=True,
-                )
-
-    await run_bounded(connected, config.parallel, lambda light: disconnect_light(light, config))
 
     if send_failures:
         log("Command failed for some lights:")
         for address, reason in send_failures.items():
             print(f"- {address} :: {reason}")
-        return 2
+
+    status_code = 0
+    if missing or send_failures:
+        status_code = 2
 
     names = ", ".join(f"{light.name}({light.address})" for light in connected)
-    log(f"Command sent successfully to {len(connected)} light(s): {names}")
-    return 0 if not missing else 2
+    if status_code == 0:
+        log(f"Command sent successfully to {len(connected)} light(s): {names}")
+    else:
+        log(
+            f"Command sent to {len(connected)} connected light(s) with warnings/errors: {names}"
+        )
+    return status_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1195,6 +1573,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip BLE scan and connect directly to configured MAC addresses",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Keep BLE connections open and accept live commands from stdin",
+    )
     parser.add_argument("--on", action="store_true", help="Turn light(s) on")
     parser.add_argument("--off", action="store_true", help="Turn light(s) off")
     parser.add_argument(
@@ -1218,10 +1601,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--scan-timeout", default=8.0, type=float)
     parser.add_argument("--scan-attempts", default=3, type=int)
+    parser.add_argument(
+        "--resolve-timeout",
+        default=2.0,
+        type=float,
+        help="Short scan timeout used to resolve BLE handles for --skip-discovery",
+    )
     parser.add_argument("--connect-timeout", default=12.0, type=float)
     parser.add_argument("--connect-retries", default=3, type=int)
     parser.add_argument("--write-retries", default=2, type=int)
-    parser.add_argument("--passes", default=2, type=int, help="How many send passes to run")
+    parser.add_argument(
+        "--passes",
+        default=2,
+        type=int,
+        help="Max adaptive send attempts (retries only failed lights)",
+    )
     parser.add_argument(
         "--parallel", default=2, type=int, help="Max concurrent connect/write operations"
     )
@@ -1248,7 +1642,7 @@ def main() -> int:
     args = parser.parse_args()
     validate_args(parser, args)
     try:
-        return asyncio.run(async_main(args))
+        return asyncio.run(async_main(args, sys.argv[1:]))
     except ConfigError as exc:
         print(f"[ERROR] {exc}")
         return 2

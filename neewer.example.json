@@ -2,6 +2,7 @@
   "defaults": {
     "scan_timeout": 3,
     "scan_attempts": 2,
+    "resolve_timeout": 2.0,
     "connect_retries": 3,
     "write_retries": 2,
     "passes": 2,

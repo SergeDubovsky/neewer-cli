@@ -86,6 +86,9 @@ neewer-cli --light D2:E2:75:8B:36:45,F8:46:85:EF:47:70 --mode CCT --temp 5600 --
 
 # fast fixed-rig mode (no scan)
 neewer-cli --light group:studio --preset all_on --skip-discovery
+
+# persistent low-latency mode (keep connections open)
+neewer-cli --serve --light group:studio --skip-discovery --debug
 ```
 
 ## Configuration
@@ -112,12 +115,32 @@ Reference material:
 For flaky BLE environments, tune:
 
 - `--scan-attempts`
+- `--resolve-timeout` (short BLE handle resolve scan for `--skip-discovery`)
 - `--connect-retries`
 - `--write-retries`
-- `--passes`
+- `--passes` (adaptive retries for failed lights only)
 - `--parallel`
 
 For stable fixed setups, keep `lights` fully defined in config and use `--skip-discovery` to reduce latency.
+
+### Serve Mode
+
+`--serve` keeps BLE connections open and accepts commands from stdin:
+
+```bash
+neewer-cli --serve --light group:studio --skip-discovery --debug
+```
+
+Interactive commands:
+
+- `on`
+- `off`
+- `cct <temp> <bri> [gm]`
+- `hsi <hue> <sat> <bri>`
+- `scene <effect> <bri>`
+- `preset <name>`
+- `help`
+- `exit`
 
 ## Security
 
@@ -144,14 +167,12 @@ Maintainer release flow:
 ## Project Docs
 
 - Wiki home: https://github.com/SergeDubovsky/neewer-cli/wiki
-- Developer guide: [docs/developer-guide.md](docs/developer-guide.md)
+- Developer guide: https://github.com/SergeDubovsky/neewer-cli/wiki/Developer-Guide
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Release process: [RELEASING.md](RELEASING.md)
 - Security policy: [SECURITY.md](SECURITY.md)
 - Support policy: [SUPPORT.md](SUPPORT.md)
 - Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-
-Wiki source markdown is tracked in [docs/wiki](docs/wiki).
 
 ## License
 
