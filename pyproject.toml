@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neewer-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "Standalone Neewer BLE CLI utility"
 readme = "README.md"
 requires-python = ">=3.9"
