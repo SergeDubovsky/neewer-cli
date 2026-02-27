@@ -1,0 +1,46 @@
+{
+  "defaults": {
+    "scan_timeout": 3,
+    "scan_attempts": 2,
+    "connect_retries": 3,
+    "write_retries": 2,
+    "passes": 2,
+    "parallel": 1,
+    "skip_discovery": true
+  },
+  "lights": {
+    "D2:E2:75:8B:36:45": {
+      "name": "FS150B-Key",
+      "cct_only": false,
+      "infinity_mode": 0
+    },
+    "F8:46:85:EF:47:70": {
+      "name": "FS150B-Fill",
+      "cct_only": false,
+      "infinity_mode": 0
+    }
+  },
+  "groups": {
+    "studio": [
+      "D2:E2:75:8B:36:45",
+      "F8:46:85:EF:47:70"
+    ]
+  },
+  "presets": {
+    "all_on": {
+      "lights": "group:studio",
+      "power": "ON"
+    },
+    "all_off": {
+      "lights": "group:studio",
+      "power": "OFF"
+    },
+    "key_cct_5600_30": {
+      "lights": "group:studio",
+      "mode": "CCT",
+      "temp": 5600,
+      "bri": 30,
+      "gm": 0
+    }
+  }
+}
