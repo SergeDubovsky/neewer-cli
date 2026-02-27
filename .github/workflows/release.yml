@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -67,8 +67,12 @@ jobs:
 
   github-release:
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - build
+      - publish-pypi
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - name: Download Build Artifacts
         uses: actions/download-artifact@v8
@@ -83,3 +87,45 @@ jobs:
           name: ${{ env.RELEASE_TAG }}
           files: dist/*
           generate_release_notes: true
+
+  publish-testpypi:
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 10
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/neewer-cli
+    permissions:
+      id-token: write
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ env.RELEASE_TAG }}
+          path: dist
+
+      - name: Publish to TestPyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - publish-testpypi
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/neewer-cli
+    permissions:
+      id-token: write
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-${{ env.RELEASE_TAG }}
+          path: dist
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1

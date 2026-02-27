@@ -53,7 +53,7 @@ neewer-cli --help
 neewer-cli --version
 ```
 
-PyPI distribution is planned but not yet published.
+PyPI publishing is handled by GitHub Actions using Trusted Publishing (OIDC).
 
 ## Quick Start
 
@@ -188,7 +188,18 @@ Maintainer release flow:
 2. Run local checks (`ruff`, `pytest`, `build`, `twine check`).
 3. Commit and push to `main`.
 4. Tag and push (`git tag vX.Y.Z && git push origin vX.Y.Z`).
-5. Release workflow publishes artifacts to GitHub Releases.
+5. Release workflow:
+   - builds + tests
+   - publishes to TestPyPI (`testpypi` environment)
+   - publishes to PyPI (`pypi` environment)
+   - creates a GitHub Release with built artifacts
+
+Trusted Publishing setup requirement:
+
+- In both TestPyPI and PyPI project settings, add this repository/workflow as a Trusted Publisher for:
+  - owner/repo: `SergeDubovsky/neewer-cli`
+  - workflow: `.github/workflows/release.yml`
+  - environments: `testpypi` and `pypi`
 
 ## Project Docs
 
