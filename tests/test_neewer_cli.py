@@ -397,3 +397,56 @@ async def test_send_command_once_writes_payload():
     assert err == ""
     assert len(client.calls) == 1
     assert client.calls[0][0] == neewer_cli.SET_LIGHT_UUID
+
+
+@pytest.mark.asyncio
+async def test_send_command_once_can_power_on_first_in_same_session():
+    class FakeClient:
+        def __init__(self):
+            self.is_connected = True
+            self.calls = []
+
+        async def write_gatt_char(self, uuid, data, response=False):
+            self.calls.append((uuid, list(data), response))
+
+    client = FakeClient()
+    light = neewer_cli.LightInfo(
+        name="Test",
+        realname="Test",
+        address="AA:AA:AA:AA:AA:AA",
+        rssi=-40,
+        cct_only=False,
+        infinity_mode=0,
+        ble_device=None,
+        client=client,  # type: ignore[arg-type]
+    )
+    config = neewer_cli.AppConfig(
+        debug=False,
+        scan_timeout=1.0,
+        scan_attempts=1,
+        connect_timeout=1.0,
+        connect_retries=1,
+        write_retries=1,
+        passes=1,
+        parallel=1,
+        settle_delay=0.0,
+        power_with_response=True,
+        power_on_first=True,
+        power_on_delay=0.0,
+    )
+    command = [120, 135, 2, 40, 56, 50]
+    ok, err = await neewer_cli.send_command_once(light, command, config)
+
+    assert ok is True
+    assert err == ""
+    assert len(client.calls) == 2
+    assert client.calls[0] == (
+        neewer_cli.SET_LIGHT_UUID,
+        neewer_cli.tag_checksum([120, 129, 1, 1]),
+        True,
+    )
+    assert client.calls[1] == (
+        neewer_cli.SET_LIGHT_UUID,
+        neewer_cli.tag_checksum([120, 135, 2, 40, 56]),
+        False,
+    )

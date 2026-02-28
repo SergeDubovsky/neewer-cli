@@ -165,6 +165,8 @@ class AppConfig:
     enable_status_query: bool = False
     enable_extended_scene: bool = False
     status_timeout: float = 1.0
+    power_on_first: bool = False
+    power_on_delay: float = 0.5
 
 
 class UnsupportedModeError(RuntimeError):
@@ -1186,6 +1188,21 @@ async def send_command_once(
         payload_sequence = build_payload_sequence(
             light, base_command, power_with_response=config.power_with_response
         )
+        if config.power_on_first and int(base_command[1]) != 129:
+            power_sequence = build_payload_sequence(
+                light,
+                set_power_bytestring(True),
+                power_with_response=config.power_with_response,
+            )
+            if power_sequence:
+                prepended = list(power_sequence)
+                payload, response, extra_delay = prepended[-1]
+                prepended[-1] = (
+                    payload,
+                    response,
+                    max(extra_delay, config.power_on_delay),
+                )
+                payload_sequence = prepended + payload_sequence
     except UnsupportedModeError as exc:
         return False, str(exc)
     except ValueError as exc:
@@ -1478,6 +1495,8 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         enable_status_query=bool(args.enable_status_query),
         enable_extended_scene=bool(args.enable_extended_scene),
         status_timeout=max(0.1, float(args.status_timeout)),
+        power_on_first=bool(args.power_on_first),
+        power_on_delay=max(0.0, float(args.power_on_delay_ms) / 1000.0),
     )
 
 
@@ -2042,6 +2061,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--parallel", default=2, type=int, help="Max concurrent connect/write operations"
     )
     parser.add_argument("--settle-ms", default=50, type=int, help="Delay between BLE writes")
+    parser.add_argument(
+        "--power-on-first",
+        action="store_true",
+        help="For non-power commands, send power-on first in the same BLE session",
+    )
+    parser.add_argument(
+        "--power-on-delay-ms",
+        default=500,
+        type=int,
+        help="Delay after power-on when using --power-on-first",
+    )
     parser.add_argument(
         "--no-response",
         action="store_true",

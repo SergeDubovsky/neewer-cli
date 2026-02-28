@@ -104,6 +104,9 @@ neewer-cli --light D2:E2:75:8B:36:45,F8:46:85:EF:47:70 --mode CCT --temp 5600 --
 # fast fixed-rig mode (no scan)
 neewer-cli --light group:studio --preset all_on --skip-discovery
 
+# power on and apply CCT in one invocation / one BLE session
+neewer-cli --light group:studio --mode CCT --temp 5600 --bri 30 --power-on-first --skip-discovery
+
 # persistent low-latency mode (keep connections open)
 neewer-cli --serve --light group:studio --skip-discovery --debug
 ```
