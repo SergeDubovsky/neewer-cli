@@ -254,6 +254,34 @@ def _arg_present(argv: Sequence[str], arg_name: str) -> bool:
     return False
 
 
+COMMAND_OPTION_ALIASES = {
+    "brightness": "bri",
+    "saturation": "sat",
+    "temperature": "temp",
+    "effect": "scene",
+    "power": "on",
+    "bright_min": "scene_bright_min",
+    "bright_max": "scene_bright_max",
+    "temp_min": "scene_temp_min",
+    "temp_max": "scene_temp_max",
+    "hue_min": "scene_hue_min",
+    "hue_max": "scene_hue_max",
+    "speed": "scene_speed",
+    "sparks": "scene_sparks",
+    "special_options": "scene_special",
+    "specialoptions": "scene_special",
+    "poweron": "power_on_first",
+    "power_on": "power_on_first",
+    "power_on_delay": "power_on_delay_ms",
+    "powerondelay": "power_on_delay_ms",
+}
+
+
+def normalize_command_option_key(raw_key: Any) -> str:
+    key = str(raw_key).strip().replace("-", "_")
+    return COMMAND_OPTION_ALIASES.get(key, key)
+
+
 def _normalize_lights_block(raw_lights: Any) -> Dict[str, Dict[str, Any]]:
     if raw_lights is None:
         return {}
@@ -444,29 +472,10 @@ def apply_preset_from_config(
         if not _arg_present(argv, "light") and normalized:
             args.light = ",".join(sorted(normalized.keys()))
 
-    alias_map = {
-        "brightness": "bri",
-        "saturation": "sat",
-        "temperature": "temp",
-        "effect": "scene",
-        "power": "on",
-        "bright_min": "scene_bright_min",
-        "bright_max": "scene_bright_max",
-        "temp_min": "scene_temp_min",
-        "temp_max": "scene_temp_max",
-        "hue_min": "scene_hue_min",
-        "hue_max": "scene_hue_max",
-        "speed": "scene_speed",
-        "sparks": "scene_sparks",
-        "special_options": "scene_special",
-        "specialoptions": "scene_special",
-    }
-
     for raw_key, value in preset.items():
         if raw_key == "per_light":
             continue
-        raw_key_text = str(raw_key)
-        key = alias_map.get(raw_key_text, raw_key_text).replace("-", "_")
+        key = normalize_command_option_key(raw_key)
         if key == "lights":
             if _arg_present(argv, "light"):
                 continue
@@ -1515,26 +1524,8 @@ def apply_command_overrides(
     namespace: argparse.Namespace,
     overrides: Dict[str, Any],
 ) -> None:
-    alias_map = {
-        "brightness": "bri",
-        "saturation": "sat",
-        "temperature": "temp",
-        "effect": "scene",
-        "power": "on",
-        "bright_min": "scene_bright_min",
-        "bright_max": "scene_bright_max",
-        "temp_min": "scene_temp_min",
-        "temp_max": "scene_temp_max",
-        "hue_min": "scene_hue_min",
-        "hue_max": "scene_hue_max",
-        "speed": "scene_speed",
-        "sparks": "scene_sparks",
-        "special_options": "scene_special",
-        "specialoptions": "scene_special",
-    }
-
     for raw_key, raw_value in overrides.items():
-        key = alias_map.get(raw_key, raw_key).replace("-", "_")
+        key = normalize_command_option_key(raw_key)
         if key == "on":
             if isinstance(raw_value, str):
                 normalized = raw_value.strip().upper()

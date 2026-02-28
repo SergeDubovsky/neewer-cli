@@ -125,6 +125,16 @@ Top-level config keys:
 - `presets`: reusable command sets
 - `presets.<name>.per_light`: per-light command overrides in one run
 
+Preset entries can include the same option names as CLI flags. This includes:
+
+- `power_on_first: true` to send a power-on before a non-power preset command
+- `power_on_delay_ms: 500` to tune the delay before the follow-up command
+
+Supported shorthand aliases inside presets and command overrides:
+
+- `power_on: true` or `poweron: true` -> `power_on_first`
+- `power_on_delay: 500` -> `power_on_delay_ms`
+
 Optional per-light feature flags in `lights`:
 
 - `supports_status_query`: override model detection for `--status` query commands

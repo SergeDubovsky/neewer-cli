@@ -99,6 +99,26 @@ def test_apply_preset_from_config_scene_aliases_map_to_extended_args():
     assert args.scene_speed == 7
 
 
+def test_apply_preset_from_config_supports_power_on_aliases():
+    args = make_args()
+    args.preset = "studio_default"
+    config = {
+        "presets": {
+            "studio_default": {
+                "mode": "CCT",
+                "temp": 5600,
+                "bri": 30,
+                "power_on": True,
+                "power_on_delay": 250,
+            }
+        }
+    }
+
+    neewer_cli.apply_preset_from_config(args, config, [])
+    assert args.power_on_first is True
+    assert args.power_on_delay_ms == 250
+
+
 def test_build_per_light_command_map_uses_overrides():
     args = make_args()
     args.mode = "CCT"

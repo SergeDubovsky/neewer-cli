@@ -48,7 +48,8 @@
       "mode": "CCT",
       "temp": 5600,
       "bri": 30,
-      "gm": 0
+      "gm": 0,
+      "power_on_first": true
     }
   }
 }
