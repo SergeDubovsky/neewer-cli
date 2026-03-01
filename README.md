@@ -68,6 +68,7 @@ After install:
 ```bash
 neewer-cli --help
 neewer-cli --version
+neewer-config --help
 ```
 
 PyPI publishing is handled by GitHub Actions using Trusted Publishing (OIDC), with no long-lived PyPI API keys stored in GitHub.
@@ -85,7 +86,10 @@ copy neewer.example.json %USERPROFILE%\.neewer
 # macOS/Linux
 cp neewer.example.json ~/.neewer
 
-# 3) run presets
+# 3) run interactive config wizard (recommended for first setup)
+neewer-config
+
+# 4) run presets
 neewer-cli --preset all_on
 neewer-cli --preset all_off
 neewer-cli --preset key_cct_5600_30
