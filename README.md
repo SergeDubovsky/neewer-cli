@@ -26,6 +26,7 @@ This project is based on and derives protocol/model support from:
 - Bluetooth adapter with BLE support
 
 The runtime BLE dependency (`bleak`) is installed automatically by package install commands below.
+For the Textual TUI editor, install the optional `tui` extra.
 
 ## Installation
 
@@ -44,6 +45,12 @@ Alternative user install:
 
 ```bash
 python -m pip install --user neewer-cli
+```
+
+Install with TUI support:
+
+```bash
+python -m pip install --user "neewer-cli[tui]"
 ```
 
 Upgrade:
@@ -69,6 +76,7 @@ After install:
 neewer-cli --help
 neewer-cli --version
 neewer-config --help
+neewer-config-tui --help
 ```
 
 PyPI publishing is handled by GitHub Actions using Trusted Publishing (OIDC), with no long-lived PyPI API keys stored in GitHub.
@@ -76,24 +84,92 @@ PyPI publishing is handled by GitHub Actions using Trusted Publishing (OIDC), wi
 ## Quick Start
 
 ```bash
-# 1) discover lights
+# 1) open Text UI config editor (recommended onboarding)
+neewer-config-tui
+
+# 2) discover lights (optional direct scan check)
 neewer-cli --list
 
-# 2) copy example config to default config path
+# 3) copy example config to default config path (optional manual setup path)
 # Windows (PowerShell/CMD)
 copy neewer.example.json %USERPROFILE%\.neewer
 
 # macOS/Linux
 cp neewer.example.json ~/.neewer
 
-# 3) run interactive config wizard (recommended for first setup)
+# 4) run interactive text wizard (non-TUI fallback)
 neewer-config
 
-# 4) run presets
+# 5) run presets
 neewer-cli --preset all_on
 neewer-cli --preset all_off
 neewer-cli --preset key_cct_5600_30
 ```
+
+If `textual` is not installed, install it with:
+
+```bash
+python -m pip install "neewer-cli[tui]"
+# or
+python -m pip install textual
+```
+
+## Interactive Config Editors
+
+Two dedicated configuration tools are included:
+
+- `neewer-config`: wizard-style onboarding and config editing
+- `neewer-config-tui`: tree-based Textual TUI for live editing
+
+### `neewer-config` Wizard
+
+Use this for guided onboarding or terminal-only workflows:
+
+```bash
+neewer-config
+```
+
+Main flows include:
+
+- Detailed BLE scan for discoverable Neewer lights
+- Create/update groups
+- Configure per-light metadata (`name`, `cct_only`, `infinity_mode`)
+- Create/maintain presets (`POWER ON`, `POWER OFF`, CCT)
+- Add/remove/move lights across existing presets
+- Edit per-light CCT parameters in existing presets
+
+### `neewer-config-tui` Tree Editor
+
+Use this for a visual workflow:
+
+```bash
+neewer-config-tui
+```
+
+Layout:
+
+- Scan findings panel at top
+- Config tree on left (`Presets`, `Groups`, `Lights`)
+- Context editor on right for preset defaults, per-light overrides, and light metadata
+
+Presence validation:
+
+- `✓` bright white: light confirmed in latest scan
+- `?` grey: configured light not seen in latest scan
+
+Assignment workflow:
+
+1. Scan lights.
+2. Select a scanned light in the top selector.
+3. Select target `Group` or `Preset` node in the tree.
+4. Use `Assign -> Group` or `Assign -> Preset`.
+
+Key bindings:
+
+- `Ctrl+F`: scan
+- `Ctrl+S`: save
+- `Ctrl+R`: reload
+- `q`: quit (double-press if unsaved changes)
 
 ## Common Commands
 
@@ -240,6 +316,8 @@ Trusted Publishing setup requirement:
 
 - Wiki home: https://github.com/SergeDubovsky/neewer-cli/wiki
 - Developer guide: https://github.com/SergeDubovsky/neewer-cli/wiki/Developer-Guide
+- Configuration guide (repo mirror): [docs/wiki/Configuration.md](docs/wiki/Configuration.md)
+- Interactive editor guide (repo mirror): [docs/wiki/Interactive-Config-Editors.md](docs/wiki/Interactive-Config-Editors.md)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Release process: [RELEASING.md](RELEASING.md)
 - Security policy: [SECURITY.md](SECURITY.md)

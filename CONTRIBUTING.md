@@ -31,6 +31,7 @@ python -m twine check dist/*
 
 - [docs/developer-guide.md](docs/developer-guide.md)
 - [docs/wiki/Configuration.md](docs/wiki/Configuration.md)
+- [docs/wiki/Interactive-Config-Editors.md](docs/wiki/Interactive-Config-Editors.md)
 
 ## Attribution
 
